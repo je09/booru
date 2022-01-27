@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ func ServePostsInBoardJSON(w http.ResponseWriter, r *http.Request) {
 	db := lib.GetDatabase()
 
 	var board models.Board
-	if err := db.Where(&models.Board{UUID: keys[0]}).First(&board).Error; err != nil {
+	if err := db.Where(&models.Board{Link: keys[0]}).First(&board).Error; err != nil {
 		http.Error(w, "Board not found", http.StatusNotFound)
 		return
 	}
@@ -69,10 +70,18 @@ func CreatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, handler, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
+	var fileExt string
+	var file multipart.File
+
+	if r.Form.Has("file") {
+		file, handler, err := r.FormFile("file")
+		defer file.Close()
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		fileExt = filepath.Ext(handler.Filename)
 	}
 
 	newPost := &models.Post{
@@ -80,22 +89,22 @@ func CreatePost(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:     "Anonymous",
 		Content:       r.FormValue("content"),
 		BoardID:       board.ID,
-		FileExtension: filepath.Ext(handler.Filename),
+		FileExtension: fileExt,
 	}
 
-	defer file.Close()
-	filepath := fmt.Sprintf("./images/%s%s", newPost.UUID, newPost.FileExtension)
-	dst, err := os.Create(filepath)
-	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	if file != nil && fileExt != "" {
+		filepath := fmt.Sprintf("./images/%s%s", newPost.UUID, newPost.FileExtension)
+		dst, err := os.Create(filepath)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		defer dst.Close()
 
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, file); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
+		if _, err := io.Copy(dst, file); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	db.NewRecord(newPost)
